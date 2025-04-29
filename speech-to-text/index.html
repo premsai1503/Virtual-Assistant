@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transformer.js</title>
+    <style>
+        body{
+            background-color: black;
+            color: white;
+        }
+        button {
+            width: 6vw;
+            height: 3vh;
+            margin: 5px;
+        }
+    </style>
+</head>
+<body style="text-align: center;">
+    <button id="loadModel">Load Model</button>
+    <button id="startMic">Start Mic</button>
+    <button id="stopMic">Stop Mic</button>
+    <p>Stable Transcript: <span id="transcript"></span></p>
+    <p>Live Feedback: <span id="partial-transcript" class="partial"></span></p>
+    <script type="application/javascript" src="https://cdn.jsdelivr.net/npm/vosk-browser@0.0.8/dist/vosk.js"></script>
+    <!-- <script type="module" src="index.js"></script> -->
+    <script>
+        const startButton = document.getElementById("startMic");
+const stopButton = document.getElementById("stopMic");
+const loadButton = document.getElementById("loadModel");
+const transcript = document.getElementById("transcript");
+const partialTranscript = document.getElementById("partial-transcript");
+
+let micStream;
+let recognizer;
+let audioCtx;
+
+const intiMic = async () => {
+    try {
+        micStream = await navigator.mediaDevices.getUserMedia({ 
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                channelCount: 1,
+                sampleRate: 16000
+            },
+        video: false 
+        });
+        console.log('Mic started.');
+        console.log(micStream);
+        transcript.textContent = "Accessing mic ...";
+    } catch (err) {
+        console.error('Mic error:', err);
+        alert("Need microphone access to use the website")
+    }
+};
+
+// Model initialization
+loadButton.addEventListener("click", async () => {
+    try {
+        model = await Vosk.createModel("./vosk-model-small-en-us-0.15.zip");
+        recognizer = new model.KaldiRecognizer(16000);
+        setupRecognizerEvents();
+        loadButton.disabled = true;
+    } catch (error) {
+        console.error("Model loading failed:", error);
+    }
+});
+
+// Recognizer event handlers
+function setupRecognizerEvents() {
+    recognizer.on('result', (message) => {
+        const stableText = message.result.text;
+        if (stableText) {
+            transcript.textContent += stableText + " ";
+            partialTranscript.textContent = ""; // Clear partial after stable result
+        }
+    });
+
+    recognizer.on('partialresult', (message) => {
+        const partialText = message.result.partial;
+        if (partialText) {
+            partialTranscript.textContent = partialText;
+        }
+    });
+
+    recognizer.on('error', (error) => {
+        console.error("Recognition error:", error);
+    });
+}
+
+startButton.addEventListener("click", async () => {
+    if (!micStream || micStream.getTracks().some(track => track.readyState === 'ended')) { 
+        await intiMic();
+    }
+    if (!audioCtx || audioCtx.state === 'closed') {
+        audioCtx = new AudioContext({ sampleRate: 16000 });
+        await audioCtx.audioWorklet.addModule('recorder-worklet.js');
+    }
+    const recorderNode = new AudioWorkletNode(audioCtx, 'recorder-processor', {
+        numberOfInputs: 1,
+        numberOfOutputs: 0,
+        channelCount: 1
+    });
+    // In the main JavaScript (index.html)
+    recorderNode.port.onmessage = (event) => {
+        try {
+            // Create an AudioBuffer with the received Float32Array data
+            const audioBuffer = audioCtx.createBuffer(1, event.data.length, 16000);
+            audioBuffer.copyToChannel(event.data, 0);
+            recognizer.acceptWaveform(audioBuffer);
+        } catch (err) {
+            console.error('acceptWaveform failed', err);
+        }
+    };
+    const source = audioCtx.createMediaStreamSource(micStream);
+    source.connect(recorderNode);
+});
+
+stopButton.addEventListener("click", async () => {
+    if (micStream) {
+        micStream.getTracks().forEach(track => track.stop());
+        micStream = null;
+    }
+    if (audioCtx) {
+        await audioCtx.close();
+        audioCtx = null;
+    }
+    console.log("Mic Stopped");
+    transcript.textContent = "Recording Stopped";
+});
+    </script>
+</body>
+</html>
